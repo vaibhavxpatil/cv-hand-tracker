@@ -20,6 +20,7 @@ import { setupHandLandmarker, drawInfo, drawLandmarks, drawIndexTipCursor }
   from './tracker.js';
 import { PopItGame } from './apps/pop_it.js';
 import { DrawApp }   from './apps/draw.js';
+import { Sidebar }   from './sidebar.js';
 
 async function main() {
   const video   = document.getElementById('webcam');
@@ -52,12 +53,13 @@ async function main() {
   const handLandmarker = await setupHandLandmarker();
   loading.classList.add('hidden');
 
-  // ── 3. Apps ───────────────────────────────────────────────────────────────
+  // ── 3. Apps + sidebar ────────────────────────────────────────────────────
   // Add new apps here (same pattern as main.py)
   const apps = [
     new PopItGame(),
     new DrawApp(),
   ];
+  const sidebar = new Sidebar();
 
   // ── 4. Main loop ──────────────────────────────────────────────────────────
   let lastTimestamp = -1;
@@ -84,14 +86,20 @@ async function main() {
       }
     }
 
-    // Feed every detected hand to all apps
+    // Only the active app receives input — prevents launching another app
+    // while one is already running (mirrors main.py lines 67-76).
+    const activeApp = apps.find(a => !a.isIdle) ?? null;
+    const targets   = activeApp ? [activeApp] : apps;
+
     if (result?.landmarks?.length) {
       for (const landmarks of result.landmarks) {
         const tip = landmarks[8]; // index finger tip
         // Mirror x to match selfie display (see coordinate convention above)
         const fx = Math.round((1 - tip.x) * w);
         const fy = Math.round(tip.y * h);
-        for (const app of apps) {
+        // Sidebar: tab toggle works always; launching only when nothing is active
+        sidebar.processFingertip(fx, fy, w, h, apps, !activeApp);
+        for (const app of targets) {
           app.processFingertip(fx, fy, w, h);
           app.processHand(landmarks, w, h);
         }
@@ -103,6 +111,41 @@ async function main() {
     const anyActive = apps.some(a => !a.isIdle);
     if (!anyActive) {
       drawInfo(ctx, result, w, h);
+
+      // ── CV Playground title — shown on idle home screen ─────────────────
+      ctx.save();
+      ctx.font      = 'bold 52px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+
+      // Dark glass pill behind title + subtitle for camera readability
+      const titleMetrics    = ctx.measureText('CV Playground');
+      const pillPadX = 28, pillPadY = 14;
+      const pillW = titleMetrics.width + pillPadX * 2 + 40; // +40 for subtitle wider
+      const pillH = 90;
+      const pillX = w / 2 - pillW / 2;
+      const pillY = 6;
+      ctx.beginPath();
+      ctx.roundRect(pillX, pillY, pillW, pillH, 18);
+      ctx.fillStyle = 'rgba(8, 10, 28, 0.62)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      ctx.lineWidth   = 1;
+      ctx.stroke();
+
+      // Main title
+      ctx.textBaseline  = 'middle';
+      ctx.fillStyle     = 'rgba(255,255,255,0.92)';
+      ctx.shadowColor   = 'rgba(0,0,0,0.6)';
+      ctx.shadowBlur    = 8;
+      ctx.fillText('CV Playground', w / 2, 46);
+
+      // Subtitle
+      ctx.font          = '17px system-ui, sans-serif';
+      ctx.fillStyle     = 'rgba(200,210,255,0.70)';
+      ctx.shadowColor   = 'transparent';
+      ctx.shadowBlur    = 0;
+      ctx.fillText('Point your index finger at an app to begin', w / 2, 82);
+      ctx.restore();
     } else if (result?.landmarks?.length) {
       for (const landmarks of result.landmarks) {
         drawLandmarks(ctx, landmarks, w, h);
@@ -110,10 +153,14 @@ async function main() {
       }
     }
 
-    // Render each app's overlay
+    // Render apps — pass true so apps never draw their own idle trigger
+    // buttons (the sidebar dock replaces them).
     for (const app of apps) {
-      app.updateAndDraw(ctx, w, h);
+      app.updateAndDraw(ctx, w, h, true);
     }
+
+    // Sidebar always rendered last so it sits on top of everything.
+    sidebar.updateAndDraw(ctx, w, h, apps);
 
     requestAnimationFrame(loop);
   }
