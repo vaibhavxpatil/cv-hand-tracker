@@ -11,18 +11,10 @@
 
 const GAME_DURATION = 30;     // seconds
 
-// Original BGR tuples from Python, converted to CSS rgb():
-// BGR(b,g,r) → CSS rgb(r,g,b)
 const BALL_COLORS = [
-  'rgb(255,80,0)',    // (0,80,255)   BGR → red-orange
-  'rgb(255,165,0)',   // (0,165,255)  BGR → orange
-  'rgb(255,230,0)',   // (0,230,255)  BGR → yellow
-  'rgb(120,255,30)',  // (30,255,120) BGR → green
-  'rgb(20,200,255)',  // (255,200,20) BGR → cyan
-  'rgb(60,60,255)',   // (255,60,60)  BGR → blue
-  'rgb(200,0,200)',   // (200,0,200)  BGR → purple
-  'rgb(160,0,255)',   // (255,0,160)  BGR → violet
-  'rgb(0,255,160)',   // (160,255,0)  BGR → lime
+  '#FF5020', '#FFA800', '#FFE500',
+  '#78FF1E', '#14C8FF', '#3C3CFF',
+  '#C800C8', '#A000FF', '#00FFA0',
 ];
 
 const SPEED_MIN    = 120;   // px/s
@@ -40,6 +32,49 @@ function rand(min, max) { return min + Math.random() * (max - min); }
 function randInt(min, max) { return Math.floor(rand(min, max + 1)); }
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function now() { return performance.now() / 1000; }
+
+// ── UI helpers ───────────────────────────────────────────────────────────────
+
+/** Filled rounded-rect button with centered label. */
+function drawBtn(ctx, x1, y1, x2, y2, label, bg, options = {}) {
+  const { r = 14, border = 'rgba(255,255,255,0.25)', fontSize = 20, bold = true } = options;
+  const bw = x2 - x1, bh = y2 - y1;
+  ctx.save();
+  ctx.shadowColor   = 'rgba(0,0,0,0.45)';
+  ctx.shadowBlur    = 10;
+  ctx.shadowOffsetY = 3;
+  ctx.beginPath();
+  ctx.roundRect(x1, y1, bw, bh, r);
+  ctx.fillStyle = bg;
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.strokeStyle = border;
+  ctx.lineWidth   = 1.5;
+  ctx.stroke();
+  ctx.font          = `${bold ? 'bold ' : ''}${fontSize}px system-ui, sans-serif`;
+  ctx.fillStyle     = '#fff';
+  ctx.textAlign     = 'center';
+  ctx.textBaseline  = 'middle';
+  ctx.fillText(label, x1 + bw / 2, y1 + bh / 2);
+  ctx.restore();
+}
+
+/** Dark glass panel. */
+function drawPanel(ctx, x, y, w, h, r = 16) {
+  ctx.save();
+  ctx.shadowColor   = 'rgba(0,0,0,0.5)';
+  ctx.shadowBlur    = 12;
+  ctx.shadowOffsetY = 3;
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  ctx.fillStyle = 'rgba(12, 12, 22, 0.72)';
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth   = 1;
+  ctx.stroke();
+  ctx.restore();
+}
 
 // ── PopItGame ─────────────────────────────────────────────────────────────────
 
@@ -59,6 +94,12 @@ export class PopItGame {
 
   get isIdle() { return this._state === 'idle'; }
 
+  /** Called by the sidebar dock to launch this app. */
+  open() {
+    if (this._state !== 'idle') return;
+    this._start();
+  }
+
   processFingertip(fx, fy, w, h) {
     this._checkButtons(fx, fy, w, h);
     if (this._state === 'active') this._tryPop(fx, fy);
@@ -66,7 +107,7 @@ export class PopItGame {
 
   processHand(_landmarks, _w, _h) { /* not used by this app */ }
 
-  updateAndDraw(ctx, w, h) {
+  updateAndDraw(ctx, w, h, anyActive = false) {
     const t  = now();
     const dt = this._lastTick ? t - this._lastTick : 0;
     this._lastTick = t;
@@ -78,8 +119,9 @@ export class PopItGame {
       this._drawEnd(ctx, w, h);
     }
 
-    if (this._state === 'idle') {
-      this._drawButton(ctx, w, h);
+    // Hide the trigger button while another app is running
+    if (this._state === 'idle' && !anyActive) {
+      this._drawIdleButton(ctx, w, h);
     }
   }
 
@@ -102,6 +144,9 @@ export class PopItGame {
     this._state   = 'idle';
     this._balls   = [];
     this._effects = [];
+    // Prevent the idle trigger from firing immediately while the finger is
+    // still hovering over the exit button area.
+    this._btnTimes['start'] = now();
   }
 
   // ── Update ──────────────────────────────────────────────────────────────────
@@ -138,7 +183,7 @@ export class PopItGame {
         this._effects.push({ x: b.x, y: b.y, radius: b.radius, color: b.color, born: now() });
         this._balls.splice(i, 1);
         this.score++;
-        return; // one pop per frame
+        return;
       }
     }
   }
@@ -153,8 +198,8 @@ export class PopItGame {
       return false;
     };
 
-    if (this._state === 'idle') {
-      if (this._inRect(fx, fy, ...this._btnPopit(w, h)) && ok('start')) this._start();
+    if (this._state === 'active') {
+      if (this._inRect(fx, fy, ...this._btnActiveExit(w, h)) && ok('exit')) this._exit();
     } else if (this._state === 'end') {
       if (this._inRect(fx, fy, ...this._btnRestart(w, h)) && ok('restart')) this._start();
       else if (this._inRect(fx, fy, ...this._btnExit(w, h)) && ok('exit')) this._exit();
@@ -166,9 +211,9 @@ export class PopItGame {
   }
 
   // ── Button rects [x1, y1, x2, y2] ──────────────────────────────────────────
-  // Positions match the Python version exactly.
 
-  _btnPopit(w, _h)   { return [w - 160, 12, w - 12, 66]; }
+  _btnPopit(w, _h)       { return [w - 160, 12, w - 12, 66]; }
+  _btnActiveExit(_w, _h) { return [12, 12, 120, 56]; }  // top-LEFT — away from idle trigger
 
   _btnRestart(w, h) {
     const cx = w / 2, cy = h / 2 + 60;
@@ -182,35 +227,34 @@ export class PopItGame {
 
   // ── Drawing ─────────────────────────────────────────────────────────────────
 
-  _drawButton(ctx, w, h) {
+  _drawIdleButton(ctx, w, h) {
     const [x1, y1, x2, y2] = this._btnPopit(w, h);
-    ctx.save();
-    ctx.fillStyle   = 'rgb(255,160,30)';   // BGR(30,160,255) → RGB
-    ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth   = 2;
-    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-    ctx.font        = 'bold 22px system-ui, sans-serif';
-    ctx.fillStyle   = '#fff';
-    ctx.fillText('Pop It!', x1 + 10, y1 + 38);
-    ctx.restore();
+    drawBtn(ctx, x1, y1, x2, y2, 'Pop It!', 'rgba(230, 110, 20, 0.88)');
   }
 
   _drawActive(ctx, w, h, t) {
-    // Balls
+    // ── Balls ──────────────────────────────────────────────────────────────
     for (const b of this._balls) {
       ctx.save();
+      // Radial gradient for depth
+      const grad = ctx.createRadialGradient(
+        b.x - b.radius * 0.3, b.y - b.radius * 0.35, b.radius * 0.1,
+        b.x, b.y, b.radius,
+      );
+      grad.addColorStop(0, '#fff');
+      grad.addColorStop(0.3, b.color);
+      grad.addColorStop(1, b.color + '88');
       ctx.beginPath();
       ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
-      ctx.fillStyle   = b.color;
+      ctx.fillStyle = grad;
       ctx.fill();
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth   = 2;
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth   = 1.5;
       ctx.stroke();
       ctx.restore();
     }
 
-    // Pop burst rings
+    // ── Pop burst rings ────────────────────────────────────────────────────
     for (const e of this._effects) {
       const progress = (t - e.born) / POP_DURATION;
       for (let ring = 0; ring < 3; ring++) {
@@ -228,93 +272,97 @@ export class PopItGame {
       }
     }
 
-    // Timer — top-center
-    const remaining  = Math.max(0, GAME_DURATION - (t - this._gameStart));
-    const timerText  = `${Math.ceil(remaining)}s`;
-    const timerColor = remaining > 10 ? '#ffff00' : '#ff5a00';
+    // ── Score + Timer — combined panel, top-center ─────────────────────────
+    const remaining = Math.max(0, GAME_DURATION - (t - this._gameStart));
+    const urgent    = remaining <= 10;
+    const timerText = `${Math.ceil(remaining)}s`;
+    const panelW = 320, panelH = 58;
+    const panelX = w / 2 - panelW / 2;
+    drawPanel(ctx, panelX, 8, panelW, panelH, 14);
+
+    // Score (left half)
     ctx.save();
-    ctx.font      = 'bold 54px system-ui, sans-serif';
-    ctx.fillStyle = timerColor;
-    ctx.textAlign = 'center';
-    ctx.fillText(timerText, w / 2, 58);
+    ctx.font         = 'bold 26px system-ui, sans-serif';
+    ctx.fillStyle    = '#30E88A';
+    ctx.textAlign    = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`Score: ${this.score}`, panelX + 16, 37);
     ctx.restore();
 
-    // Score box — top-left
+    // Divider
     ctx.save();
-    ctx.fillStyle   = '#000';
-    ctx.fillRect(10, 10, 210, 52);
-    ctx.strokeStyle = 'rgb(50,220,100)';  // BGR(100,220,50) → RGB
-    ctx.lineWidth   = 2;
-    ctx.strokeRect(10, 10, 210, 52);
-    ctx.font        = 'bold 32px system-ui, sans-serif';
-    ctx.fillStyle   = 'rgb(50,255,120)';
-    ctx.fillText(`Score: ${this.score}`, 20, 48);
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth   = 1;
+    ctx.beginPath();
+    ctx.moveTo(w / 2 + 10, 18);
+    ctx.lineTo(w / 2 + 10, 54);
+    ctx.stroke();
     ctx.restore();
+
+    // Timer (right half)
+    ctx.save();
+    ctx.font         = 'bold 38px system-ui, sans-serif';
+    ctx.fillStyle    = urgent ? '#FF5020' : '#FFE040';
+    ctx.textAlign    = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor  = urgent ? 'rgba(255,80,20,0.5)' : 'transparent';
+    ctx.shadowBlur   = urgent ? 10 : 0;
+    ctx.fillText(timerText, panelX + panelW - 16, 37);
+    ctx.restore();
+
+    // ── Exit — top-right ───────────────────────────────────────────────────
+    const [ex1, ey1, ex2, ey2] = this._btnActiveExit(w, h);
+    drawBtn(ctx, ex1, ey1, ex2, ey2, '← Exit', 'rgba(210, 40, 40, 0.88)', { fontSize: 17 });
   }
 
   _drawEnd(ctx, w, h) {
     // Dark overlay
     ctx.save();
-    ctx.globalAlpha = 0.55;
-    ctx.fillStyle   = '#000';
+    ctx.globalAlpha = 0.6;
+    ctx.fillStyle   = 'rgba(8, 8, 18, 1)';
     ctx.fillRect(0, 0, w, h);
     ctx.restore();
 
     const cx = w / 2, cy = h / 2;
 
+    // Card panel
+    drawPanel(ctx, cx - 220, cy - 130, 440, 280, 22);
+
     // Title
     ctx.save();
-    ctx.font      = 'bold 72px system-ui, sans-serif';
-    ctx.fillStyle = 'rgb(0,240,255)';    // BGR(255,240,0) → RGB
-    ctx.textAlign = 'center';
-    ctx.fillText('Game Over!', cx, cy - 80);
+    ctx.font          = 'bold 58px system-ui, sans-serif';
+    ctx.fillStyle     = '#FFE040';
+    ctx.textAlign     = 'center';
+    ctx.textBaseline  = 'alphabetic';
+    ctx.shadowColor   = 'rgba(255,220,0,0.4)';
+    ctx.shadowBlur    = 16;
+    ctx.fillText('Game Over!', cx, cy - 48);
     ctx.restore();
 
     // Score
     ctx.save();
-    ctx.font      = 'bold 52px system-ui, sans-serif';
-    ctx.fillStyle = '#fff';
-    ctx.textAlign = 'center';
-    ctx.fillText(`Score: ${this.score}`, cx, cy - 10);
+    ctx.font          = 'bold 40px system-ui, sans-serif';
+    ctx.fillStyle     = '#fff';
+    ctx.textAlign     = 'center';
+    ctx.textBaseline  = 'alphabetic';
+    ctx.fillText(`Score: ${this.score}`, cx, cy + 14);
     ctx.restore();
 
     // Restart button
     const [rx1, ry1, rx2, ry2] = this._btnRestart(w, h);
-    ctx.save();
-    ctx.fillStyle   = 'rgb(30,180,30)';   // same in BGR and RGB (symmetric)
-    ctx.fillRect(rx1, ry1, rx2 - rx1, ry2 - ry1);
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth   = 2;
-    ctx.strokeRect(rx1, ry1, rx2 - rx1, ry2 - ry1);
-    ctx.font        = 'bold 24px system-ui, sans-serif';
-    ctx.fillStyle   = '#fff';
-    ctx.textAlign   = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('Restart', (rx1 + rx2) / 2, (ry1 + ry2) / 2);
-    ctx.restore();
+    drawBtn(ctx, rx1, ry1, rx2, ry2, 'Restart', 'rgba(30, 170, 60, 0.90)', { fontSize: 20 });
 
     // Exit button
-    const [ex1, ey1, ex2, ey2] = this._btnExit(w, h);
-    ctx.save();
-    ctx.fillStyle   = 'rgb(200,30,30)';   // BGR(30,30,200) → RGB
-    ctx.fillRect(ex1, ey1, ex2 - ex1, ey2 - ey1);
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth   = 2;
-    ctx.strokeRect(ex1, ey1, ex2 - ex1, ey2 - ey1);
-    ctx.font        = 'bold 24px system-ui, sans-serif';
-    ctx.fillStyle   = '#fff';
-    ctx.textAlign   = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('Exit', (ex1 + ex2) / 2, (ey1 + ey2) / 2);
-    ctx.restore();
+    const [bx1, by1, bx2, by2] = this._btnExit(w, h);
+    drawBtn(ctx, bx1, by1, bx2, by2, 'Exit', 'rgba(210, 40, 40, 0.90)', { fontSize: 20 });
 
     // Prompt
     ctx.save();
-    ctx.font        = '18px system-ui, sans-serif';
-    ctx.fillStyle   = 'rgb(180,180,180)';
-    ctx.textAlign   = 'center';
+    ctx.font         = '15px system-ui, sans-serif';
+    ctx.fillStyle    = 'rgba(160,160,180,0.9)';
+    ctx.textAlign    = 'center';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText('Touch a button with your index finger', cx, cy + 120);
+    ctx.fillText('Point your index finger at a button', cx, cy + 120);
     ctx.restore();
   }
 }
