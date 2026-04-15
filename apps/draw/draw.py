@@ -195,8 +195,8 @@ class DrawApp(BaseApp):
 
     @staticmethod
     def _btn_exit(w, h):
-        """Exit button: top-left corner."""
-        return (12, 12, 120, 56)
+        """Exit button: top-right corner."""
+        return (w - 160, 12, w - 12, 56)
 
     @staticmethod
     def _btn_eraser(w, h):
