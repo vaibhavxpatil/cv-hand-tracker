@@ -180,6 +180,9 @@ class PopItGame(BaseApp):
         if self._state == "idle":
             if self._in(fx, fy, *self._btn_popit(w, h)) and _ok("start"):
                 self._start()
+        elif self._state == "active":
+            if self._in(fx, fy, *self._btn_popit(w, h)) and _ok("exit"):
+                self._exit()
         elif self._state == "end":
             if self._in(fx, fy, *self._btn_restart(w, h)) and _ok("restart"):
                 self._start()
@@ -249,6 +252,15 @@ class PopItGame(BaseApp):
         cv2.rectangle(frame, (10, 10), (220, 62), (50, 220, 100), 2)
         cv2.putText(frame, score_txt, (20, 48),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.1, (50, 255, 120), 2)
+
+        # Exit button — top-right (same rect as idle trigger)
+        x1, y1, x2, y2 = self._btn_popit(w, h)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (30, 30, 200), -1)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
+        lbl        = "Exit"
+        (lw, _), _ = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.78, 2)
+        cv2.putText(frame, lbl, (x1 + (x2 - x1 - lw) // 2, y1 + 38),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.78, (255, 255, 255), 2)
 
     def _draw_end(self, frame, w, h):
         # Dark overlay

@@ -62,13 +62,16 @@ def main():
 
             h, w, _ = frame.shape
 
-            # Feed every detected hand to all apps
+            # Only the active app receives input — prevents launching another
+            # app while one is already running.
+            active_app = next((app for app in apps if not app.is_idle), None)
             if result and result.hand_landmarks:
                 for landmarks in result.hand_landmarks:
                     tip  = landmarks[8]
                     fx   = int(tip.x * w)
                     fy   = int(tip.y * h)
-                    for app in apps:
+                    targets = [active_app] if active_app else apps
+                    for app in targets:
                         app.process_fingertip(fx, fy, w, h)
                         app.process_hand(landmarks, w, h)
 
